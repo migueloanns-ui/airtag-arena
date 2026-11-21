@@ -19,7 +19,6 @@ const WEAPONS = {
 };
 const MODES = {
   ffa: { name: 'Todos contra todos', teams: false, min: 2 },
-  ffaspawn: { name: 'Todos contra todos com ponto', teams: false, min: 2 },
   team: { name: 'Equipe', teams: true, min: 4 },
   spawn: { name: 'Ponto de equipe', teams: true, min: 4 },
 };
@@ -107,11 +106,8 @@ function getUser(name) {
 function myMatch(u) {
   return u.matchId ? matches.get(u.matchId) : null;
 }
-const newPlayer = () => ({ weapon: null, alive: true, kills: 0, deaths: 0, shots: 0, hits: 0, maxDist: 0, revives: 0, lastShot: 0, team: 0, spawnSince: null, left: false });
+const newPlayer = () => ({ weapon: null, alive: true, kills: 0, lastShot: 0, team: 0, spawnSince: null, left: false });
 const isTeamMode = (m) => MODES[m.mode].teams;
-// modos com ponto de spawn: 'spawn' (um por time) e 'ffaspawn' (um só, para todos)
-const usesSpawn = (m) => m.mode === 'spawn' || m.mode === 'ffaspawn';
-const spawnOf = (m, p) => (m.mode === 'ffaspawn' ? m.spawns[1] : m.spawns[p.team]);
 const tag = (m, name) => (isTeamMode(m) && m.players[name]?.team ? `[${TEAM_NAMES[m.players[name].team]}] ${name}` : name);
 
 function freshPos(name) {
@@ -120,21 +116,21 @@ function freshPos(name) {
 }
 // Está dentro do spawn do próprio time? (só no modo Ponto de equipe)
 function inSpawn(m, name) {
-  if (!usesSpawn(m)) return false;
+  if (m.mode !== 'spawn') return false;
   const p = m.players[name];
-  const sp = p && spawnOf(m, p);
+  const sp = p && m.spawns[p.team];
   const pos = freshPos(name);
   return !!(sp && pos && distance(pos, sp) <= SPAWN_RADIUS);
 }
 // Quem morreu volta ao jogo depois de ficar REVIVE_MS dentro do spawn do seu time
 function tickMatch(m) {
-  if (!usesSpawn(m)) return;
+  if (m.mode !== 'spawn') return;
   for (const [name, p] of Object.entries(m.players)) {
     if (p.left || p.alive) { p.spawnSince = null; continue; }
     if (inSpawn(m, name)) {
       if (!p.spawnSince) p.spawnSince = now();
       else if (now() - p.spawnSince >= REVIVE_MS) {
-        p.alive = true; p.spawnSince = null; p.revives++;
+        p.alive = true; p.spawnSince = null;
         m.log.push({ t: now(), text: `${tag(m, name)} voltou ao jogo!` });
       }
     } else p.spawnSince = null;
@@ -159,12 +155,6 @@ function checkEnd(m) {
   if (m.mode === 'ffa') {
     const alive = act.filter(([, p]) => p.alive);
     if (alive.length <= 1) finish(m, 0, alive[0]?.[0], alive[0] ? `${alive[0][0]} venceu a partida!` : 'Fim de jogo, sem vencedor.');
-    return;
-  }
-  if (m.mode === 'ffaspawn') {
-    const top = act.find(([, p]) => p.kills >= m.goal);
-    if (top) finish(m, 0, top[0], `${top[0]} venceu com ${top[1].kills} abates!`);
-    else if (act.length <= 1) finish(m, 0, act[0]?.[0], act[0] ? `${act[0][0]} venceu, os outros saíram.` : 'Fim de jogo.');
     return;
   }
   const members = (t) => act.filter(([, p]) => p.team === t).length;
@@ -368,7 +358,6 @@ routes['POST /api/match/start'] = (req) => {
   const without = names.filter((n) => !m.players[n].weapon);
   if (without.length) fail(400, `Falta escolher arma: ${without.join(', ')}`);
   if (m.mode === 'spawn' && (!m.spawns[1] || !m.spawns[2])) fail(400, 'Marque o spawn dos dois times no mapa antes de começar.');
-  if (m.mode === 'ffaspawn' && !m.spawns[1]) fail(400, 'Marque o ponto de spawn no mapa antes de começar.');
   if (mode.teams) { // sorteia os times
     const sh = [...names];
     for (let i = sh.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [sh[i], sh[j]] = [sh[j], sh[i]]; }
@@ -437,7 +426,6 @@ routes['POST /api/shoot'] = (req, body) => {
   u.pos = { lat, lng, t: now(), acc: Number(body.acc) || 10 };
   if (inSpawn(m, u.name)) fail(400, 'Você está no spawn: saia dele para atirar.');
   me.lastShot = now();
-  me.shots++;
   let best = null;
   for (const [name, p] of Object.entries(m.players)) {
     if (name === u.name || !p.alive || p.left) continue;
@@ -455,10 +443,7 @@ routes['POST /api/shoot'] = (req, body) => {
     const target = m.players[best.name];
     target.alive = false;
     target.spawnSince = null;
-    target.deaths++;
     me.kills++;
-    me.hits++;
-    me.maxDist = Math.max(me.maxDist, best.d);
     if (m.mode === 'spawn') m.score[me.team]++;
     m.log.push({ t: now(), text: `${tag(m, u.name)} eliminou ${tag(m, best.name)} (${Math.round(best.d)} m)` });
     checkEnd(m);
@@ -492,7 +477,7 @@ routes['POST /api/state'] = (req, body) => {
     if (m.mode === 'spawn') {
       if (!started || m.status === 'ended') spawns = { 1: m.spawns[1], 2: m.spawns[2] };
       else if (mine.team && m.spawns[mine.team]) spawns = { [mine.team]: m.spawns[mine.team] };
-    } else if (m.mode === 'ffaspawn' && m.spawns[1]) spawns = { 1: m.spawns[1] }; // spawn único: todos veem
+    }
     out.match = {
       id: m.id, host: m.host, status: m.status, mode: m.mode, radio: m.radio, goal: m.goal, score: m.score,
       winner: m.winner, winnerTeam: m.winnerTeam, alive: mine.alive, weapon: mine.weapon,
@@ -504,8 +489,7 @@ routes['POST /api/state'] = (req, body) => {
       players: Object.entries(m.players).filter(([, p]) => !p.left || started).map(([name, p]) => {
         const pu = users.get(key(name));
         return {
-          name, weapon: p.weapon, alive: p.alive, kills: p.kills, deaths: p.deaths, shots: p.shots, hits: p.hits, maxDist: Math.round(p.maxDist), revives: p.revives,
-          left: p.left, team: started ? p.team : 0,
+          name, weapon: p.weapon, alive: p.alive, kills: p.kills, left: p.left, team: started ? p.team : 0,
           pos: showMap && !p.left && pu?.pos ? { lat: pu.pos.lat, lng: pu.pos.lng } : undefined,
         };
       }),
