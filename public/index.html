@@ -58,6 +58,11 @@
   .seg button.sel { background:var(--acc); color:#10200a; }
   .score { font-size:22px; font-weight:800; text-align:center; }
   .t1c { color:var(--t1); } .t2c { color:var(--t2); }
+  .card.me { border-color:var(--acc); }
+  .rk { display:grid; grid-template-columns:repeat(3,1fr); gap:10px 6px; margin-top:10px; text-align:center; }
+  .rk b { font-size:18px; }
+  .rk .stats { font-size:12px; }
+  .pos { font-size:26px; min-width:40px; text-align:center; font-weight:800; }
 </style>
 </head>
 <body>
@@ -126,8 +131,8 @@
   <div class="stats" id="mode-info" style="margin-top:8px"></div>
   <div id="room-opts"></div>
   <div id="spawn-box" hidden>
-    <h2>Spawn dos times</h2>
-    <div class="stats">1) Escolha o time. 2) Toque no mapa no lugar do spawn, ou use sua posição atual.</div>
+    <h2 id="sp-h">Spawn dos times</h2>
+    <div class="stats" id="sp-help">1) Escolha o time. 2) Toque no mapa no lugar do spawn, ou use sua posição atual.</div>
     <div class="seg" style="margin-top:8px" id="sp-team"></div>
     <button class="sec" id="sp-here" style="margin-top:8px;width:100%">📍 Usar minha posição atual</button>
     <div id="spawn-map"></div>
@@ -151,6 +156,7 @@
 <section id="s-game" class="screen">
   <div id="count" hidden></div>
   <div id="status" class="alive">VIVO</div>
+  <div id="ranking" hidden></div>
   <div class="row" style="margin-top:10px;flex-wrap:wrap"><span class="tag" id="g-weapon"></span><span class="tag" id="g-gps">GPS…</span><span class="tag" id="g-head">Bússola…</span></div>
   <div id="team-box" class="card" style="margin-top:10px" hidden></div>
   <div id="spawn-info" class="card" hidden>
@@ -183,9 +189,12 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;'
 function setHtml(el, html) { if (el._h === html) return false; el._h = html; el.innerHTML = html; return true; }
 
 const TEAM = { 1: { name: 'Azul', color: '#4aa3ff' }, 2: { name: 'Vermelho', color: '#ff6b6b' } };
-const MODES = { ffa: 'Todos contra todos', team: 'Equipe', spawn: 'Ponto de equipe' };
+const MODES = { ffa: 'Todos contra todos', ffaspawn: 'Todos contra todos com ponto', team: 'Equipe', spawn: 'Ponto de equipe' };
+const isTeam = (mo) => mo === 'team' || mo === 'spawn';          // modos com times
+const usesSpawn = (mo) => mo === 'spawn' || mo === 'ffaspawn';    // modos com ponto de spawn
 const MODE_INFO = {
   ffa: 'Cada um por si. O último vivo vence.',
+  ffaspawn: 'Cada um por si, com um spawn único para todos. Quem morre volta ao spawn (fica lá uns 3 segundos para voltar ao jogo). Dentro do spawn você fica protegido, mas também não atira. Vence quem chegar primeiro na meta de abates. No fim aparece o ranking com as estatísticas de cada jogador.',
   team: 'Mínimo de 4 jogadores. Os times são sorteados quando o dono começa. Vence o time que eliminar todo o outro.',
   spawn: 'Mínimo de 4 jogadores. Times sorteados ao começar. Quem morre volta ao spawn do próprio time (fica lá uns 3 segundos para voltar ao jogo). Dentro do spawn você fica protegido, mas também não atira. Vence quem chegar primeiro na meta de abates.',
 };
@@ -314,7 +323,7 @@ function renderBanner() {
 }
 
 // ---------- sala ----------
-let roomMap = null, roomLayers = {}, roomCentered = false, spawnTeam = 1;
+let roomMap = null, roomLayers = {}, roomCentered = false, spawnTeam = 1, roomMapMode = null;
 let inviteOpen = false; const pickedRoom = new Set();
 function renderInvite(m) {
   const isHost = m.host === myName;
@@ -337,11 +346,11 @@ $('#btn-send-invites').onclick = async () => {
 };
 function destroyRoomMap() { if (roomMap) { roomMap.remove(); roomMap = null; roomLayers = {}; roomCentered = false; } }
 function tiles(mapObj) { L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(mapObj); }
-function drawSpawns(mapObj, layers, spawns, radius) {
+function drawSpawns(mapObj, layers, spawns, radius, single) {
   Object.keys(layers).forEach((k) => { if (!spawns[k]) { mapObj.removeLayer(layers[k]); delete layers[k]; } });
   Object.entries(spawns).forEach(([t, sp]) => {
     if (!sp) return;
-    if (!layers[t]) layers[t] = L.circle([sp.lat, sp.lng], { radius, color: TEAM[t].color, fillOpacity: .2 }).addTo(mapObj).bindTooltip('Spawn ' + TEAM[t].name, { permanent: true, direction: 'top' });
+    if (!layers[t]) layers[t] = L.circle([sp.lat, sp.lng], { radius, color: single ? '#9be564' : TEAM[t].color, fillOpacity: .2 }).addTo(mapObj).bindTooltip(single ? 'Spawn' : 'Spawn ' + TEAM[t].name, { permanent: true, direction: 'top' });
     else layers[t].setLatLng([sp.lat, sp.lng]);
   });
 }
@@ -361,18 +370,22 @@ function renderRoom() {
   let opts = '';
   if (isHost) {
     opts = `<button class="sec" id="opt-radio" style="width:100%;margin-top:8px">📻 Rádio (walkie-talkie): ${m.radio ? 'ligado' : 'desligado'}</button>`;
-    if (m.mode === 'spawn') opts += `<h2>Meta de abates</h2><div class="seg">${[5, 10, 15, 20].map((g) => `<button data-goal="${g}" class="${m.goal === g ? 'sel' : 'sec'}">${g}</button>`).join('')}</div>`;
+    if (usesSpawn(m.mode)) opts += `<h2>Meta de abates</h2><div class="seg">${[5, 10, 15, 20].map((g) => `<button data-goal="${g}" class="${m.goal === g ? 'sel' : 'sec'}">${g}</button>`).join('')}</div>`;
   } else {
-    opts = `<div class="stats" style="margin-top:6px">📻 Rádio: ${m.radio ? 'ligado' : 'desligado'}${m.mode === 'spawn' ? ` · Meta: ${m.goal} abates` : ''}</div>`;
+    opts = `<div class="stats" style="margin-top:6px">📻 Rádio: ${m.radio ? 'ligado' : 'desligado'}${usesSpawn(m.mode) ? ` · Meta: ${m.goal} abates` : ''}</div>`;
   }
   if (setHtml($('#room-opts'), opts)) {
     const r = $('#opt-radio'); if (r) r.onclick = async () => { await api('match/options', { radio: !S.match.radio }); poll(); };
     $$('[data-goal]').forEach((b) => b.onclick = async () => { await api('match/options', { goal: +b.dataset.goal }); poll(); });
   }
   // spawn (só o dono, só no modo Ponto de equipe)
-  const showSp = isHost && m.mode === 'spawn';
+  const showSp = isHost && usesSpawn(m.mode);
   $('#spawn-box').hidden = !showSp;
   if (showSp) {
+    const single = m.mode === 'ffaspawn';
+    if (roomMap && roomMapMode !== m.mode) destroyRoomMap();
+    roomMapMode = m.mode;
+    if (single) spawnTeam = 1;
     if (!roomMap) {
       roomMap = L.map('spawn-map'); tiles(roomMap);
       roomMap.setView(pos ? [pos.lat, pos.lng] : [-14.2, -51.9], pos ? 17 : 4);
@@ -381,10 +394,13 @@ function renderRoom() {
       setTimeout(() => roomMap.invalidateSize(), 150);
     }
     if (!roomCentered && pos) { roomMap.setView([pos.lat, pos.lng], 17); roomCentered = true; }
-    drawSpawns(roomMap, roomLayers, m.spawns, m.radius);
+    drawSpawns(roomMap, roomLayers, m.spawns, m.radius, single);
+    $('#sp-h').textContent = single ? 'Ponto de spawn' : 'Spawn dos times';
+    $('#sp-help').textContent = single ? 'Toque no mapa no lugar do spawn, ou use sua posição atual. Todos os jogadores usam o mesmo ponto.' : '1) Escolha o time. 2) Toque no mapa no lugar do spawn, ou use sua posição atual.';
+    $('#sp-team').hidden = single;
     const tHtml = [1, 2].map((t) => `<button data-spteam="${t}" class="${spawnTeam === t ? 'sel' : 'sec'}">Spawn ${TEAM[t].name}</button>`).join('');
-    if (setHtml($('#sp-team'), tHtml + `<!-- ${spawnTeam} -->`)) $$('[data-spteam]').forEach((b) => b.onclick = () => { spawnTeam = +b.dataset.spteam; $('#sp-team')._h = ''; renderRoom(); });
-    $('#sp-state').textContent = `Azul: ${m.spawns[1] ? '✅ marcado' : '❌ falta marcar'} · Vermelho: ${m.spawns[2] ? '✅ marcado' : '❌ falta marcar'}`;
+    if (!single && setHtml($('#sp-team'), tHtml + `<!-- ${spawnTeam} -->`)) $$('[data-spteam]').forEach((b) => b.onclick = () => { spawnTeam = +b.dataset.spteam; $('#sp-team')._h = ''; renderRoom(); });
+    $('#sp-state').textContent = single ? `Spawn: ${m.spawns[1] ? '✅ marcado' : '❌ falta marcar'}` : `Azul: ${m.spawns[1] ? '✅ marcado' : '❌ falta marcar'} · Vermelho: ${m.spawns[2] ? '✅ marcado' : '❌ falta marcar'}`;
   } else destroyRoomMap();
   // jogadores
   const pl = m.players.map((p) => `<div class="card row"><div class="grow"><b>${esc(p.name)}</b> ${p.name === m.host ? '<span class="tag">dono</span>' : ''}</div>
@@ -407,9 +423,37 @@ $('#btn-leave').onclick = async () => { await api('match/leave'); destroyRoomMap
 // ---------- jogo ----------
 let map = null, markers = {}, spawnLayers = {}, centered = false;
 function teamTag(t) { return t ? `<span class="tag t${t}">${TEAM[t].name}</span>` : ''; }
+// ---------- ranking e estatísticas ----------
+const accuracy = (p) => (p.shots ? Math.round(100 * p.hits / p.shots) : 0);
+function rankPlayers(m) {
+  return m.players.slice().sort((a, b) => (b.name === m.winner) - (a.name === m.winner) || b.kills - a.kills || a.deaths - b.deaths || accuracy(b) - accuracy(a));
+}
+function ffaBoard(m) {
+  const rows = rankPlayers(m).filter((p) => !p.left).map((p) => `<div class="row" style="margin:4px 0"><b class="grow">${esc(p.name)}${p.name === myName ? ' (você)' : ''}</b><span class="tag ${p.alive ? 'ok' : 'dead'}">${p.alive ? 'vivo' : 'morto'}</span><b style="min-width:24px;text-align:right">${p.kills}</b></div>`).join('');
+  return `<div class="row" style="margin-bottom:8px"><b class="grow">Placar</b><span class="stats">Meta: ${m.goal} abates</span></div>${rows}`;
+}
+function rankingHtml(m) {
+  const medals = ['🥇', '🥈', '🥉'];
+  const cell = (v, l) => `<div><b>${v}</b><div class="stats">${l}</div></div>`;
+  return '<h2>🏆 Ranking final</h2>' + rankPlayers(m).map((p, i) => {
+    const kd = (p.kills / Math.max(p.deaths, 1)).toFixed(2);
+    const wname = p.weapon && S.weapons[p.weapon] ? S.weapons[p.weapon].name : '—';
+    return `<div class="card ${p.name === myName ? 'me' : ''}">
+      <div class="row"><span class="pos">${medals[i] || (i + 1) + 'º'}</span>
+        <div class="grow"><b>${esc(p.name)}${p.name === myName ? ' (você)' : ''}</b>
+          <div class="stats">${wname}${p.left ? ' · saiu da partida' : ''}</div></div>
+        ${isTeam(m.mode) && p.team ? teamTag(p.team) : ''}</div>
+      <div class="rk">
+        ${cell(p.kills, 'Abates')}${cell(p.deaths, 'Mortes')}${cell(kd, 'K/D')}
+        ${cell(p.shots, 'Tiros')}${cell(accuracy(p) + '%', 'Precisão')}${cell(p.maxDist ? p.maxDist + ' m' : '—', 'Tiro mais longo')}
+        ${usesSpawn(m.mode) ? cell(p.revives, 'Voltas ao jogo') : ''}
+      </div></div>`;
+  }).join('');
+}
+
 function renderGame() {
   const m = S.match;
-  const teamMode = m.mode !== 'ffa';
+  const teamMode = isTeam(m.mode);
   const cnt = $('#count');
   cnt.hidden = m.status !== 'countdown';
   if (m.status === 'countdown') cnt.innerHTML = `${m.countdown}<div class="stats" style="font-size:18px">${teamMode ? `Você é do time <b class="t${m.team}c">${TEAM[m.team].name.toUpperCase()}</b>. ` : ''}CORRA! Espalhem-se pelo local.</div>`;
@@ -420,7 +464,7 @@ function renderGame() {
     st.textContent = teamMode ? (m.winnerTeam ? (won ? '🏆 SEU TIME VENCEU!' : `Fim — time ${TEAM[m.winnerTeam].name} venceu`) : 'Fim — empate') : (m.winner ? (won ? '🏆 VOCÊ VENCEU!' : `Fim — ${m.winner} venceu`) : 'Fim de jogo');
   } else {
     st.className = m.alive ? 'alive' : 'dead';
-    st.textContent = m.alive ? (m.protected ? 'VIVO 🛡' : 'VIVO') : (m.mode === 'spawn' ? '☠ MORREU — volte ao spawn!' : '☠ VOCÊ MORREU');
+    st.textContent = m.alive ? (m.protected ? 'VIVO 🛡' : 'VIVO') : (usesSpawn(m.mode) ? '☠ MORREU — volte ao spawn!' : '☠ VOCÊ MORREU');
   }
   $('#g-weapon').textContent = m.weapon ? S.weapons[m.weapon].name : '';
   $('#g-gps').className = 'tag ' + (pos ? 'ok' : ''); $('#g-gps').textContent = pos ? `GPS ±${Math.round(pos.acc)} m` : 'GPS sem sinal';
@@ -428,8 +472,9 @@ function renderGame() {
 
   // caixa do time (nomes dos colegas) e placar
   const tb = $('#team-box');
-  tb.hidden = !teamMode;
-  if (teamMode) {
+  tb.hidden = !(teamMode || m.mode === 'ffaspawn');
+  if (m.mode === 'ffaspawn') setHtml(tb, ffaBoard(m));
+  else if (teamMode) {
     const mates = m.players.filter((p) => p.team === m.team);
     let h = `<div class="row" style="margin-bottom:8px"><b class="grow">Seu time: <span class="t${m.team}c">${TEAM[m.team].name}</span></b></div>`;
     if (m.mode === 'spawn') h += `<div class="score"><span class="t1c">${m.score[1]}</span> × <span class="t2c">${m.score[2]}</span></div><div class="stats" style="text-align:center;margin-bottom:8px">Meta: ${m.goal} abates</div>`;
@@ -438,13 +483,14 @@ function renderGame() {
   }
 
   // spawn: distância e seta
-  const sp = m.spawns && m.spawns[m.team];
-  const showSp = m.mode === 'spawn' && (m.status === 'countdown' || m.status === 'playing') && sp;
+  const single = m.mode === 'ffaspawn';
+  const sp = m.spawns && m.spawns[single ? 1 : m.team];
+  const showSp = usesSpawn(m.mode) && (m.status === 'countdown' || m.status === 'playing') && sp;
   $('#spawn-info').hidden = !showSp;
   if (showSp) {
     const d = pos ? dist(pos, sp) : null;
     const inside = d !== null && d <= m.radius;
-    $('#sp-title').textContent = m.alive ? (m.protected ? '🛡 Você está protegido no spawn' : '📍 Spawn do seu time') : '☠ Volte ao spawn do seu time!';
+    $('#sp-title').textContent = m.alive ? (m.protected ? '🛡 Você está protegido no spawn' : single ? '📍 Ponto de spawn' : '📍 Spawn do seu time') : (single ? '☠ Volte ao spawn!' : '☠ Volte ao spawn do seu time!');
     $('#sp-sub').textContent = d === null ? 'Sem sinal de GPS' : inside ? (m.alive ? 'Dentro do spawn (aqui você não atira)' : `Fique aí… voltando ao jogo em ${m.respawnIn ?? 3}s`) : `${Math.round(d)} m de distância`;
     const ar = $('#sp-arrow');
     ar.style.visibility = d !== null && !inside && heading !== null ? 'visible' : 'hidden';
@@ -461,6 +507,9 @@ function renderGame() {
   ptt.hidden = !canTalk;
   if (canTalk && !rec) ptt.textContent = m.alive ? '🎙 Rádio do time (segure para falar)' : '🎙 Rádio dos mortos (segure para falar)';
 
+  const rk = $('#ranking');
+  rk.hidden = m.status !== 'ended';
+  if (m.status === 'ended') setHtml(rk, rankingHtml(m));
   setHtml($('#log'), m.log.slice().reverse().map((l) => `<div>${esc(l.text)}</div>`).join(''));
   $('#btn-exit').hidden = m.status !== 'ended';
   $('#btn-end').hidden = !(m.host === myName && m.status === 'playing');
@@ -473,7 +522,7 @@ function renderGame() {
 function updateMap(m) {
   if (!map) { map = L.map('map', { zoomControl: true }); tiles(map); setTimeout(() => map.invalidateSize(), 100); }
   const pts = [];
-  const teamMode = m.mode !== 'ffa';
+  const teamMode = isTeam(m.mode);
   m.players.forEach((p) => {
     if (!p.pos) return;
     pts.push([p.pos.lat, p.pos.lng]);
@@ -482,7 +531,7 @@ function updateMap(m) {
     if (!markers[p.name]) markers[p.name] = L.circleMarker([p.pos.lat, p.pos.lng], { radius: 10, weight: 3, fillOpacity: .9 }).addTo(map).bindTooltip(p.name, { permanent: true, direction: 'top' });
     markers[p.name].setLatLng([p.pos.lat, p.pos.lng]).setStyle({ color: p.name === myName ? '#fff' : base, fillColor: fill });
   });
-  drawSpawns(map, spawnLayers, m.spawns || {}, m.radius);
+  drawSpawns(map, spawnLayers, m.spawns || {}, m.radius, m.mode === 'ffaspawn');
   Object.values(m.spawns || {}).forEach((s) => s && pts.push([s.lat, s.lng]));
   if (pts.length && !centered) { map.fitBounds(pts, { maxZoom: 18, padding: [30, 30] }); centered = true; }
 }
