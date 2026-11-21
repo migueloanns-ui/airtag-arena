@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#0f1412">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>AirTag Arena</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root { --bg:#0f1412; --card:#1a221e; --line:#2b3832; --fg:#e8f0ec; --mut:#8fa399; --acc:#9be564; --bad:#ff5d5d; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.4 system-ui,sans-serif; min-height:100vh; }
+  .screen { display:none; padding:16px; max-width:480px; margin:0 auto; }
+  .screen.on { display:block; }
+  h1 { margin:8px 0 4px; font-size:28px; letter-spacing:.5px; }
+  h2 { margin:18px 0 8px; font-size:15px; color:var(--mut); text-transform:uppercase; letter-spacing:1px; }
+  p.sub { margin:0 0 16px; color:var(--mut); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; margin-bottom:10px; }
+  .row { display:flex; align-items:center; gap:10px; }
+  .row .grow { flex:1; min-width:0; }
+  button { font:inherit; font-weight:600; border:0; border-radius:12px; padding:12px 16px; background:var(--acc); color:#10200a; cursor:pointer; }
+  button.sec { background:#2a3631; color:var(--fg); }
+  button.bad { background:var(--bad); color:#fff; }
+  button.big { width:100%; padding:16px; font-size:18px; margin-top:8px; }
+  button:disabled { opacity:.4; }
+  input[type=text] { width:100%; font:inherit; padding:13px; border-radius:12px; border:1px solid var(--line); background:#0c110f; color:var(--fg); }
+  .coins { color:#ffd966; font-weight:700; }
+  .tag { font-size:12px; padding:2px 8px; border-radius:99px; background:#2a3631; color:var(--mut); }
+  .tag.ok { background:#26421a; color:var(--acc); }
+  .tag.dead { background:#4a1e1e; color:#ff9b9b; }
+  .stats { color:var(--mut); font-size:13px; }
+  .err { color:var(--bad); min-height:20px; margin:8px 0; font-size:14px; }
+  #banner { position:sticky; top:0; z-index:50; }
+  .invite { background:#26421a; border-bottom:1px solid var(--acc); padding:10px 16px; }
+  .back { background:none; color:var(--mut); padding:6px 0; }
+  .check { display:flex; align-items:center; gap:12px; }
+  .check input { width:22px; height:22px; accent-color:var(--acc); }
+  #count { font-size:120px; font-weight:800; text-align:center; color:var(--acc); line-height:1.1; }
+  #map { height:55vh; border-radius:14px; border:1px solid var(--line); margin:10px 0; }
+  #status { text-align:center; padding:14px; border-radius:14px; font-size:22px; font-weight:800; }
+  #status.alive { background:#26421a; color:var(--acc); }
+  #status.dead { background:#4a1e1e; color:#ff9b9b; }
+  #fire { height:130px; font-size:26px; margin-top:12px; }
+  .log { font-size:13px; color:var(--mut); }
+  .seg { display:flex; gap:6px; }
+  .seg button { flex:1; }
+  .seg button.sel { background:var(--acc); color:#10200a; }
+</style>
+</head>
+<body>
+<div id="banner"></div>
+
+<!-- LOGIN -->
+<section id="s-login" class="screen">
+  <h1>AirTag Arena</h1>
+  <p class="sub">Airsoft de celular. Zero perigo, toda a correria.</p>
+  <h2>Seu nome de jogador</h2>
+  <input id="name" type="text" maxlength="16" placeholder="Ex.: Lobo123" autocomplete="off">
+  <div class="err" id="login-err"></div>
+  <button class="big" id="btn-login">Entrar</button>
+  <p class="stats" style="margin-top:16px">Cada jogador precisa de um nome único. O app vai pedir acesso à localização e aos sensores de movimento.</p>
+</section>
+
+<!-- MENU -->
+<section id="s-menu" class="screen">
+  <div class="row"><h1 class="grow" id="hello"></h1><span class="coins" id="coins"></span></div>
+  <p class="sub">Menu principal</p>
+  <button class="big" data-go="weapons">🔫 Armas</button>
+  <button class="big" data-go="friends">👥 Amigos <span id="req-count" class="tag" hidden></span></button>
+  <button class="big" data-go="newmatch">▶ Começar partida</button>
+  <button class="big sec" id="btn-logout">Sair</button>
+</section>
+
+<!-- ARMAS -->
+<section id="s-weapons" class="screen">
+  <button class="back" data-go="menu">← Voltar</button>
+  <div class="row"><h1 class="grow">Armas</h1><span class="coins" id="coins2"></span></div>
+  <div id="weapon-list"></div>
+</section>
+
+<!-- AMIGOS -->
+<section id="s-friends" class="screen">
+  <button class="back" data-go="menu">← Voltar</button>
+  <h1>Amigos</h1>
+  <h2>Adicionar por nome</h2>
+  <div class="row"><input id="friend-name" type="text" placeholder="Nome do amigo" autocomplete="off"><button id="btn-add">Enviar</button></div>
+  <div class="err" id="friend-err"></div>
+  <h2>Pedidos recebidos</h2>
+  <div id="req-list"></div>
+  <h2>Lista de amigos</h2>
+  <div id="friend-list"></div>
+</section>
+
+<!-- NOVA PARTIDA -->
+<section id="s-newmatch" class="screen">
+  <button class="back" data-go="menu">← Voltar</button>
+  <h1>Nova partida</h1>
+  <p class="sub">Escolha quem vai jogar.</p>
+  <div id="pick-list"></div>
+  <div class="err" id="match-err"></div>
+  <button class="big" id="btn-create">Criar sala e convidar</button>
+</section>
+
+<!-- SALA -->
+<section id="s-room" class="screen">
+  <h1>Sala</h1>
+  <p class="sub" id="room-sub"></p>
+  <h2>Jogadores</h2>
+  <div id="room-players"></div>
+  <h2>Sua arma</h2>
+  <div id="room-weapons"></div>
+  <div class="err" id="room-err"></div>
+  <button class="big" id="btn-start">Começar</button>
+  <button class="big sec" id="btn-leave">Sair da sala</button>
+</section>
+
+<!-- JOGO -->
+<section id="s-game" class="screen">
+  <div id="count" hidden></div>
+  <div id="status" class="alive">VIVO</div>
+  <div class="row" style="margin-top:10px"><span class="tag" id="g-weapon"></span><span class="tag" id="g-gps">GPS…</span><span class="tag" id="g-head">Bússola…</span></div>
+  <button id="fire" class="big bad">🔫 ATIRAR</button>
+  <div class="stats" style="margin-top:6px;text-align:center" id="fire-hint"></div>
+  <div id="map" hidden></div>
+  <h2>Eventos</h2>
+  <div class="log" id="log"></div>
+  <h2>Modo de tiro</h2>
+  <div class="seg" id="mode-seg">
+    <button data-mode="throw">Arremesso</button>
+    <button data-mode="flick">Sacudida</button>
+    <button data-mode="button">Só botão</button>
+  </div>
+  <button class="big sec" id="btn-exit" hidden>Sair da partida</button>
+</section>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => [...document.querySelectorAll(s)];
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let token = localStorage.getItem('at_token');
+let myName = localStorage.getItem('at_name');
+let S = null;            // último estado do servidor
+let screen = 'login';
+let pos = null;          // {lat,lng,acc}
+let heading = null;      // graus
+let mode = localStorage.getItem('at_mode') || 'throw';
+let lastFire = 0;
+
+// ---------- API ----------
+async function api(path, body) {
+  const r = await fetch('/api/' + path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-token': token || '' },
+    body: JSON.stringify(body || {}),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (r.status === 401) { logoutLocal(); throw new Error(j.error || 'Sessão expirada.'); }
+  if (!r.ok) throw new Error(j.error || 'Erro.');
+  return j;
+}
+function logoutLocal() {
+  token = null; myName = null;
+  localStorage.removeItem('at_token'); localStorage.removeItem('at_name');
+  S = null; show('login');
+}
+
+// ---------- telas ----------
+function show(name) {
+  screen = name;
+  $$('.screen').forEach((e) => e.classList.toggle('on', e.id === 's-' + name));
+  window.scrollTo(0, 0);
+  if (S) render();
+}
+$$('[data-go]').forEach((b) => b.addEventListener('click', () => show(b.dataset.go)));
+
+// ---------- login ----------
+$('#btn-login').onclick = async () => {
+  $('#login-err').textContent = '';
+  await requestSensors(); // precisa ser dentro do toque (iOS)
+  try {
+    const j = await api('login', { name: $('#name').value, token: token && myName === $('#name').value.trim() ? token : undefined });
+    token = j.token; myName = j.name;
+    localStorage.setItem('at_token', token); localStorage.setItem('at_name', myName);
+    await poll();
+    show('menu');
+  } catch (e) { $('#login-err').textContent = e.message; }
+};
+$('#btn-logout').onclick = async () => { try { await api('logout'); } catch {} logoutLocal(); };
+
+// ---------- armas ----------
+function renderWeapons() {
+  $('#weapon-list').innerHTML = Object.entries(S.weapons).map(([id, w]) => {
+    const own = S.me.owned.includes(id);
+    return `<div class="card row"><div class="grow"><b>${w.name}</b><div class="stats">Alcance ${w.range} m · Precisão ±${w.tol}° · Recarga ${(w.cd/1000).toFixed(1)} s</div></div>
+      ${own ? '<span class="tag ok">Comprada</span>' : `<button data-buy="${id}" ${S.me.coins < w.price ? 'disabled' : ''}>Comprar <span class="coins">${w.price}</span></button>`}</div>`;
+  }).join('');
+  $$('[data-buy]').forEach((b) => b.onclick = async () => { try { await api('buy', { weapon: b.dataset.buy }); await poll(); } catch (e) { alert(e.message); } });
+}
+
+// ---------- amigos ----------
+$('#btn-add').onclick = async () => {
+  $('#friend-err').textContent = '';
+  try { await api('friends/request', { name: $('#friend-name').value }); $('#friend-name').value = ''; $('#friend-err').textContent = 'Pedido enviado!'; await poll(); }
+  catch (e) { $('#friend-err').textContent = e.message; }
+};
+function renderFriends() {
+  $('#req-list').innerHTML = S.requests.length ? S.requests.map((n) => `<div class="card row"><div class="grow"><b>${esc(n)}</b></div>
+    <button data-acc="${esc(n)}">Aceitar</button><button class="sec" data-dec="${esc(n)}">Recusar</button></div>`).join('') : '<p class="stats">Nenhum pedido.</p>';
+  $('#friend-list').innerHTML = S.friends.length ? S.friends.map((n) => `<div class="card"><b>${esc(n)}</b></div>`).join('') : '<p class="stats">Você ainda não tem amigos na lista.</p>';
+  $$('[data-acc]').forEach((b) => b.onclick = async () => { await api('friends/accept', { name: b.dataset.acc }); poll(); });
+  $$('[data-dec]').forEach((b) => b.onclick = async () => { await api('friends/decline', { name: b.dataset.dec }); poll(); });
+}
+
+// ---------- nova partida ----------
+let picked = new Set();
+function renderPick() {
+  const list = $('#pick-list');
+  if (list.dataset.sig === S.friends.join('|') + picked.size) return;
+  list.innerHTML = S.friends.length ? S.friends.map((n) => `<label class="card check"><input type="checkbox" data-pick="${esc(n)}" ${picked.has(n) ? 'checked' : ''}><b>${esc(n)}</b></label>`).join('') : '<p class="stats">Adicione amigos primeiro.</p>';
+  list.dataset.sig = S.friends.join('|') + picked.size;
+  $$('[data-pick]').forEach((c) => c.onchange = () => { c.checked ? picked.add(c.dataset.pick) : picked.delete(c.dataset.pick); list.dataset.sig = ''; });
+}
+$('#btn-create').onclick = async () => {
+  $('#match-err').textContent = '';
+  try { await api('match/create', { invite: [...picked] }); picked.clear(); await poll(); } catch (e) { $('#match-err').textContent = e.message; }
+};
+
+// ---------- convites ----------
+function renderBanner() {
+  $('#banner').innerHTML = S.match ? '' : S.invites.map((i) => `<div class="invite row"><div class="grow">🎯 <b>${esc(i.host)}</b> convidou você para uma partida</div>
+    <button data-yes="${i.id}">Aceitar</button><button class="sec" data-no="${i.id}">Não</button></div>`).join('');
+  $$('[data-yes]').forEach((b) => b.onclick = async () => { try { await api('match/accept', { id: +b.dataset.yes }); await poll(); } catch (e) { alert(e.message); poll(); } });
+  $$('[data-no]').forEach((b) => b.onclick = async () => { await api('match/decline', { id: +b.dataset.no }); poll(); });
+}
+
+// ---------- sala ----------
+function renderRoom() {
+  const m = S.match;
+  const isHost = m.host === myName;
+  $('#room-sub').textContent = isHost ? 'Você é o dono. Espere seus amigos entrarem e comece.' : `Sala de ${m.host}. Aguarde o dono começar.`;
+  $('#room-players').innerHTML = m.players.map((p) => `<div class="card row"><div class="grow"><b>${esc(p.name)}</b> ${p.name === m.host ? '<span class="tag">dono</span>' : ''}</div>
+    <span class="tag ${p.weapon ? 'ok' : ''}">${p.weapon ? S.weapons[p.weapon].name : 'sem arma'}</span></div>`).join('');
+  const owned = S.me.owned;
+  $('#room-weapons').innerHTML = owned.length ? `<div class="seg">${owned.map((id) => `<button class="${m.weapon === id ? '' : 'sec'}" data-w="${id}">${S.weapons[id].name}</button>`).join('')}</div>`
+    : '<p class="stats">Você não tem armas. Saia da sala e compre uma no menu Armas.</p>';
+  $$('[data-w]').forEach((b) => b.onclick = async () => { try { await api('match/weapon', { weapon: b.dataset.w }); poll(); } catch (e) { $('#room-err').textContent = e.message; } });
+  $('#btn-start').hidden = !isHost;
+}
+$('#btn-start').onclick = async () => { $('#room-err').textContent = ''; try { await api('match/start'); poll(); } catch (e) { $('#room-err').textContent = e.message; } };
+$('#btn-leave').onclick = async () => { await api('match/leave'); S.match = null; await poll(); show('menu'); };
+
+// ---------- jogo ----------
+let map, markers = {}, centered = false;
+function renderGame() {
+  const m = S.match;
+  const cnt = $('#count');
+  cnt.hidden = m.status !== 'countdown';
+  if (m.status === 'countdown') cnt.innerHTML = `${m.countdown}<div class="stats" style="font-size:18px">CORRA! Espalhem-se pelo local.</div>`;
+  const st = $('#status');
+  if (m.status === 'ended') { st.className = m.winner === myName ? 'alive' : 'dead'; st.textContent = m.winner ? (m.winner === myName ? '🏆 VOCÊ VENCEU!' : `Fim — ${m.winner} venceu`) : 'Fim de jogo'; }
+  else { st.className = m.alive ? 'alive' : 'dead'; st.textContent = m.alive ? 'VIVO' : '☠ VOCÊ MORREU'; }
+  $('#g-weapon').textContent = m.weapon ? S.weapons[m.weapon].name : '';
+  $('#g-gps').className = 'tag ' + (pos ? 'ok' : ''); $('#g-gps').textContent = pos ? `GPS ±${Math.round(pos.acc)} m` : 'GPS sem sinal';
+  $('#g-head').className = 'tag ' + (heading !== null ? 'ok' : ''); $('#g-head').textContent = heading !== null ? `${Math.round(heading)}°` : 'Sem bússola';
+  const canShoot = m.status === 'playing' && m.alive;
+  $('#fire').hidden = !canShoot;
+  $('#fire-hint').textContent = canShoot ? ({ throw: 'Aponte para o alvo e jogue o celular pra cima (pegue com as duas mãos!) ou toque no botão.', flick: 'Aponte para o alvo e dê uma sacudida seca ou toque no botão.', button: 'Aponte para o alvo e toque no botão.' })[mode] : '';
+  $('#log').innerHTML = m.log.slice().reverse().map((l) => `<div>${esc(l.text)}</div>`).join('');
+  $('#btn-exit').hidden = m.status !== 'ended';
+  // mapa para quem morreu / fim de jogo
+  const showMap = m.status === 'ended' || (m.status === 'playing' && !m.alive);
+  $('#map').hidden = !showMap;
+  if (showMap) updateMap(m);
+  $$('#mode-seg button').forEach((b) => b.className = b.dataset.mode === mode ? 'sel' : 'sec');
+}
+function updateMap(m) {
+  if (!map) { map = L.map('map', { zoomControl: true }); L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map); setTimeout(() => map.invalidateSize(), 100); }
+  const pts = [];
+  m.players.forEach((p) => {
+    if (!p.pos) return;
+    pts.push([p.pos.lat, p.pos.lng]);
+    const color = p.alive ? '#3ddc3d' : '#888';
+    if (!markers[p.name]) markers[p.name] = L.circleMarker([p.pos.lat, p.pos.lng], { radius: 10, weight: 3, fillOpacity: .9 }).addTo(map).bindTooltip(p.name, { permanent: true, direction: 'top' });
+    markers[p.name].setLatLng([p.pos.lat, p.pos.lng]).setStyle({ color: p.name === myName ? '#fff' : color, fillColor: color });
+  });
+  if (pts.length && !centered) { map.fitBounds(pts, { maxZoom: 18, padding: [30, 30] }); centered = true; }
+}
+$('#btn-exit').onclick = async () => { await api('match/leave'); S.match = null; centered = false; markers = {}; if (map) { map.remove(); map = null; } await poll(); show('menu'); };
+
+// ---------- tiro ----------
+async function fire() {
+  const m = S && S.match;
+  if (!m || m.status !== 'playing' || !m.alive) return;
+  if (Date.now() - lastFire < 400) return;
+  lastFire = Date.now();
+  if (!pos || heading === null) { flash('Sem GPS ou bússola!'); return; }
+  try {
+    const r = await api('shoot', { lat: pos.lat, lng: pos.lng, acc: pos.acc, heading });
+    if (r.cooldown) flash('Recarregando…');
+    else if (r.hit) { flash(`🎯 Acertou ${r.hit}! (${r.distance} m)`); navigator.vibrate && navigator.vibrate([80, 40, 80]); }
+    else { flash('Errou…'); navigator.vibrate && navigator.vibrate(40); }
+    poll();
+  } catch (e) { flash(e.message); }
+}
+function flash(t) { $('#fire-hint').textContent = t; }
+$('#fire').onclick = fire;
+$$('#mode-seg button').forEach((b) => b.onclick = () => { mode = b.dataset.mode; localStorage.setItem('at_mode', mode); renderGame(); });
+
+// ---------- sensores ----------
+let sensorsOn = false;
+async function requestSensors() {
+  if (sensorsOn) return; sensorsOn = true;
+  try {
+    if (typeof DeviceMotionEvent !== 'undefined' && DeviceMotionEvent.requestPermission) await DeviceMotionEvent.requestPermission();
+    if (typeof DeviceOrientationEvent !== 'undefined' && DeviceOrientationEvent.requestPermission) await DeviceOrientationEvent.requestPermission();
+  } catch {}
+  window.addEventListener('deviceorientationabsolute', (e) => { if (e.alpha != null) heading = (360 - e.alpha) % 360; }, true);
+  window.addEventListener('deviceorientation', (e) => {
+    if (e.webkitCompassHeading != null) heading = e.webkitCompassHeading;
+    else if (e.absolute && e.alpha != null) heading = (360 - e.alpha) % 360;
+  }, true);
+  window.addEventListener('devicemotion', onMotion);
+  if (navigator.geolocation) navigator.geolocation.watchPosition(
+    (p) => { pos = { lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy || 10 }; },
+    () => { pos = null; }, { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 });
+}
+let spikeAt = 0, freeStart = 0;
+function onMotion(e) {
+  if (!S || !S.match || S.match.status !== 'playing' || !S.match.alive) return;
+  const a = e.accelerationIncludingGravity; if (!a) return;
+  const g = Math.hypot(a.x || 0, a.y || 0, a.z || 0);
+  const t = Date.now();
+  if (mode === 'flick') { if (g > 32) fire(); return; }
+  if (mode !== 'throw') return;
+  if (g > 26) { spikeAt = t; freeStart = 0; return; }       // impulso do arremesso
+  if (spikeAt && t - spikeAt > 1500) { spikeAt = 0; freeStart = 0; }
+  if (spikeAt && g < 4) {                                    // queda livre = celular no ar
+    if (!freeStart) freeStart = t;
+    else if (t - freeStart > 120) { spikeAt = 0; freeStart = 0; fire(); }
+  } else freeStart = 0;
+}
+
+// ---------- loop de estado ----------
+async function poll() {
+  if (!token) return;
+  try {
+    S = await api('state', pos ? { lat: pos.lat, lng: pos.lng, acc: pos.acc, heading } : {});
+    render();
+  } catch (e) { /* offline: tenta de novo */ }
+}
+function render() {
+  $('#hello').textContent = 'Olá, ' + S.me.name;
+  $('#coins').textContent = $('#coins2').textContent = '🪙 ' + S.me.coins;
+  const rc = $('#req-count'); rc.hidden = !S.requests.length; rc.textContent = S.requests.length;
+  renderBanner();
+  if (S.match) {
+    const st = S.match.status;
+    const want = st === 'lobby' ? 'room' : 'game';
+    if (screen !== want) { show(want); return; }
+    st === 'lobby' ? renderRoom() : renderGame();
+    return;
+  }
+  if (screen === 'room' || screen === 'game') { show('menu'); return; }
+  if (screen === 'weapons') renderWeapons();
+  if (screen === 'friends') renderFriends();
+  if (screen === 'newmatch') renderPick();
+}
+setInterval(poll, 1500);
+
+// ---------- início ----------
+(async () => {
+  if (token && myName) {
+    $('#name').value = myName;
+    try {
+      await api('login', { name: myName, token });
+      document.addEventListener('click', () => requestSensors(), { once: true }); // iOS exige um toque
+      await poll(); show('menu'); return;
+    } catch {}
+  }
+  show('login');
+})();
+</script>
+</body>
+</html>
